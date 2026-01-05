@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Painel de Monitoramento ZEZA</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        .card-animate { transition: all 0.2s ease; }
+        .card-animate:hover { transform: translateY(-3px); box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1); }
+        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+        .spinning { animation: spin 1s linear infinite; }
+    </style>
+</head>
+<body class="bg-slate-50 text-slate-900 font-sans">
+
+    <div class="bg-indigo-900 text-white shadow-lg">
+        <div class="max-w-6xl mx-auto px-6 py-8 flex flex-col md:flex-row justify-between items-center gap-4">
+            <div>
+                <h1 class="text-3xl font-black tracking-tight">ZEZA LIVE MONITOR</h1>
+                <p class="text-indigo-300 text-sm">Dados obtidos diretamente do Database</p>
+            </div>
+            
+            <div class="flex items-center gap-3">
+                <button onclick="fetchLatestData()" id="refreshBtn" class="bg-indigo-700 hover:bg-indigo-600 px-6 py-3 rounded-xl font-bold transition flex items-center gap-2 shadow-md">
+                    <i id="refreshIcon" class="fa-solid fa-sync"></i> Atualizar Agora
+                </button>
+            </div>1
+        </div>
+    </div>
+
+    <main class="max-w-6xl mx-auto py-10 px-6">
+        <div id="statusIndicator" class="mb-6 flex items-center gap-2 text-sm font-medium text-slate-500">
+            <span class="w-2 h-2 bg-yellow-500 rounded-full animate-pulse"></span>
+            Conectando ao Banco de Dados...
+        </div>
+
+        <div id="grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            </div>
+
+        <div id="emptyState" class="hidden py-20 text-center">
+            <i class="fa-solid fa-inbox text-5xl text-slate-200 mb-4"></i>
+            <p class="text-slate-400">Nenhum código encontrado no banco de dados.</p>
+        </div>
+    </main>
+
+    <script>
+        let supabaseClient;
+        let isFetching = false;
+
+        async function init() {
+            try {
+                const response = await fetch('/config');
+                const config = await response.json();
+
+                // Inicializa o cliente Supabase no Frontend
+                supabaseClient = window.supabase.createClient(config.supabaseUrl, config.supabaseKey);
+                
+                document.getElementById('statusIndicator').innerHTML = `
+                    <span class="w-2 h-2 bg-green-500 rounded-full"></span> 
+                    Conectado ao Database: Realtime Ativo
+                `;
+
+                // Busca inicial
+                fetchLatestData();
+
+                // Escuta Realtime (Se configurado no Supabase, funciona instantâneo)
+                supabaseClient
+                    .channel('realtime_codes')
+                    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'verification_codes' }, payload => {
+                        console.log('Novo código detectado via Realtime!', payload.new);
+                        fetchLatestData(); // Re-busca para garantir ordem e dados completos
+                        new Audio('https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3').play().catch(()=>{});
+                    })
+                    .subscribe();
+
+            } catch (err) {
+                console.error("Erro na inicialização:", err);
+                document.getElementById('statusIndicator').innerHTML = '<span class="text-red-500">Erro ao conectar com o servidor</span>';
+            }
+        }
+
+        async function fetchLatestData() {
+            if (!supabaseClient || isFetching) return;
+            
+            isFetching = true;
+            const btn = document.getElementById('refreshBtn');
+            const icon = document.getElementById('refreshIcon');
+            icon.classList.add('spinning');
+            btn.disabled = true;
+
+            const { data, error } = await supabaseClient
+                .from('verification_codes')
+                .select('*')
+                .order('captured_at', { ascending: false })
+                .limit(20); // Pega os últimos 20 para performance
+
+            if (error) {
+                console.error("Erro ao buscar dados:", error);
+            } else {
+                render(data);
+            }
+
+            // Simula um delay visual pequeno para o usuário sentir o refresh
+            setTimeout(() => {
+                icon.classList.remove('spinning');
+                btn.disabled = false;
+                isFetching = false;
+            }, 600);
+        }
+
+        function render(codes) {
+            const grid = document.getElementById('grid');
+            const empty = document.getElementById('emptyState');
+
+            if (!codes || codes.length === 0) {
+                grid.innerHTML = '';
+                empty.classList.remove('hidden');
+                return;
+            }
+
+            empty.classList.add('hidden');
+            grid.innerHTML = codes.map(item => {
+
+                const firstCode = item.code.split(',')[0].trim();
+                const date = new Date(item.captured_at);
+
+                return `
+                <div class="bg-white rounded-2xl p-6 shadow-sm border border-slate-200 card-animate">
+                    <div class="flex justify-between items-start mb-4">
+                        <span class="bg-indigo-50 text-indigo-700 text-[10px] font-bold px-2 py-1 rounded-lg uppercase tracking-wider">
+                            ${item.sender.split('.')[0]}
+                        </span>
+                        <div class="text-right text-[10px] font-bold text-slate-400">
+                            ${date.toLocaleTimeString()} <br> ${date.toLocaleDateString()}
+                        </div>
+                    </div>
+                    
+                    <div class="mb-5">
+                        <p class="text-[11px] text-slate-400 uppercase font-black tracking-tighter mb-1">Responsável / ID</p>
+                        <p class="text-sm font-bold text-slate-700 truncate">${item.employee_id} <span class="font-normal text-slate-400">(${item.employee_email})</span></p>
+                    </div>
+
+                    <div class="relative group bg-slate-50 rounded-xl p-5 border border-slate-100 hover:border-indigo-200 transition-colors">
+                        <div class="text-center">
+                            <span class="text-4xl font-mono font-black text-slate-800 tracking-tighter">${firstCode}</span>
+                        </div>
+                        <button onclick="copyCode('${firstCode}', this)" class="absolute top-2 right-2 text-slate-300 hover:text-indigo-600 transition">
+                            <i class="fa-regular fa-copy text-lg"></i>
+                        </button>
+                    </div>
+                </div>
+                `;
+            }).join('');
+        }
+
+        function copyCode(text, btn) {
+            navigator.clipboard.writeText(text);
+            const icon = btn.querySelector('i');
+            icon.className = 'fa-solid fa-check text-green-500';
+            setTimeout(() => icon.className = 'fa-regular fa-copy text-lg text-slate-300', 2000);
+        }
+
+        // Inicia o app
+        init();
+    </script>
+</body>
+</html>

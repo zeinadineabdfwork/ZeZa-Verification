@@ -1,0 +1,21 @@
+{
+  "name": "otp-code-project",
+  "version": "1.0.0",
+  "main": "worker.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "@supabase/supabase-js": "^2.89.0",
+    "dotenv": "^17.2.3",
+    "express": "^5.2.1",
+    "imapflow": "^1.2.3",
+    "mailparser": "^3.9.1",
+    "node": "^24.12.0",
+    "require": "^2.4.20"
+  }
+}
