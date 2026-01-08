@@ -1,372 +1,580 @@
- require('dotenv').config();
+require('dotenv').config();
 const { ImapFlow } = require('imapflow');
 const { simpleParser } = require('mailparser');
 const { createClient } = require('@supabase/supabase-js');
 const express = require('express');
 const path = require('path');
 
-// --- INICIALIZAÇÃO DO SERVIDOR WEB ---
+// ============================================================================
+// SERVIDOR WEB + API REST
+// ============================================================================
 const app = express();
-const port = process.env.PORT || 3000;
+const PORT = process.env.PORT || 3000;
 
 app.use(express.static('public'));
+app.use(express.json());
 
-app.get('/config', (req, res) => {
-  res.json({
-    supabaseUrl: process.env.SUPABASE_URL,
-    supabaseKey: process.env.SUPABASE_KEY
-  });
+app.get('/config', (req, res) => res.json({
+  supabaseUrl: process.env.SUPABASE_URL,
+  supabaseKey: process.env.SUPABASE_KEY
+}));
+
+app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
+
+// Endpoint para ativar/desativar monitor
+app.post('/api/monitors/:employeeId/toggle', async (req, res) => {
+  try {
+    const { employeeId } = req.params;
+    const { action } = req.body; // 'start' ou 'stop'
+
+    const monitor = orchestrator.monitors.find(m => m.config.employeeId === employeeId);
+
+    if (!monitor) {
+      // Monitor não existe, buscar no banco e criar
+      const { data: account } = await supabase
+        .from('email_accounts')
+        .select('*')
+        .eq('employee_id', employeeId)
+        .single();
+
+      if (!account) {
+        return res.status(404).json({ success: false, error: 'Conta não encontrada' });
+      }
+
+      if (action === 'start') {
+        await orchestrator.addMonitor({
+          user: account.email,
+          pass: account.password_app,
+          employeeId: account.employee_id
+        });
+
+        return res.json({ 
+          success: true, 
+          message: 'Monitor iniciado',
+          status: 'active'
+        });
+      }
+    } else {
+      // Monitor existe
+      if (action === 'stop') {
+        await monitor.stop();
+        orchestrator.monitors = orchestrator.monitors.filter(m => m.config.employeeId !== employeeId);
+        
+        return res.json({ 
+          success: true, 
+          message: 'Monitor parado',
+          status: 'inactive'
+        });
+      } else if (action === 'start') {
+        // Já está ativo
+        return res.json({ 
+          success: true, 
+          message: 'Monitor já está ativo',
+          status: 'active'
+        });
+      }
+    }
+
+    res.status(400).json({ success: false, error: 'Ação inválida' });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
 });
 
-app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+// Endpoint para status em tempo real
+app.get('/api/monitors/status', (req, res) => {
+  const status = orchestrator.monitors.map(m => ({
+    employeeId: m.config.employeeId,
+    email: m.config.user,
+    status: m.client?.authenticated ? 'active' : 'connecting',
+    processedCount: m.processedUIDs.size,
+    reconnectAttempts: m.reconnectAttempts,
+    cleanupDone: m.initialCleanupDone
+  }));
+  
+  res.json({ success: true, monitors: status });
 });
 
-app.listen(port, () => {
-  console.log(`\n🌐 INTERFACE WEB ATIVA: http://localhost:${port}`);
-  console.log(`💡 Acesse no navegador para ver o dashboard em tempo real.\n`);
+app.get('/api/accounts', async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('email_accounts')
+      .select('id, employee_id, employee_name, email, status, created_at')
+      .order('created_at', { ascending: false });
+
+    if (error) throw error;
+    res.json({ success: true, data });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
 });
 
-// --- VALIDAÇÃO DE AMBIENTE ---
-const requiredEnvVars = ['SUPABASE_URL', 'SUPABASE_KEY'];
-const missingEnvVars = requiredEnvVars.filter(varName => !process.env[varName]);
+app.post('/api/accounts', async (req, res) => {
+  try {
+    const { employee_name, email, password_app } = req.body;
 
-if (missingEnvVars.length > 0) {
-  console.error('❌ ERRO: Variáveis de ambiente obrigatórias não encontradas:');
-  missingEnvVars.forEach(varName => console.error(`   - ${varName}`));
+    if (!employee_name || !email || !password_app) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Todos os campos são obrigatórios' 
+      });
+    }
+
+    const employee_id = `EMP${Date.now().toString().slice(-6)}`;
+
+    const { data, error } = await supabase
+      .from('email_accounts')
+      .insert([{
+        employee_id,
+        employee_name,
+        email,
+        password_app
+      }])
+      .select();
+
+    if (error) throw error;
+
+    console.log(`✅ Nova conta: ${employee_id} - ${email}`);
+
+    await orchestrator.addMonitor({
+      user: email,
+      pass: password_app,
+      employeeId: employee_id
+    });
+
+    res.json({ 
+      success: true, 
+      message: 'Conta cadastrada!',
+      data: data[0]
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.delete('/api/accounts/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const { error } = await supabase
+      .from('email_accounts')
+      .delete()
+      .eq('id', id);
+
+    if (error) throw error;
+
+    console.log(`🗑️  Conta deletada: ${id}`);
+    res.json({ success: true, message: 'Deletada' });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.listen(PORT, () => {
+  console.log(`\n🌐 Dashboard: http://localhost:${PORT}\n`);
+});
+
+// ============================================================================
+// VALIDAÇÃO
+// ============================================================================
+const requiredVars = ['SUPABASE_URL', 'SUPABASE_KEY'];
+const missing = requiredVars.filter(v => !process.env[v]);
+
+if (missing.length > 0) {
+  console.error('❌ Faltam variáveis:', missing.join(', '));
   process.exit(1);
 }
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
-// CONFIGURAÇÃO DE CONTAS
-const EMAIL_ACCOUNTS = [
-  {
-    user: 'saifafaruk40@gmail.com',
-    pass: 'icin aeex aher dohg',
-    employeeId: 'EMP001'
-  }
-
-];
-
+// ============================================================================
+// CONFIGURAÇÃO
+// ============================================================================
 const ALLOWED_SENDERS = [
-  'facebookmail.com', 
+  'facebookmail.com',
   'google.com',
   'instagram.com',
   'tiktok.com',
   'gmail.com',
-  'simo.co.mz' 
+  'simo.co.mz'
 ];
 
 const CODE_REGEX = /\b(\d{6,8})\b/g;
+const SECURITY_KEYWORD = process.env.SECURITY_KEYWORD || '3DS';
 
+console.log(`🔒 Palavra-chave: "${SECURITY_KEYWORD}"`);
+console.log(`💡 Só processa e-mails com essa palavra\n`);
+
+// ============================================================================
+// MONITOR DE E-MAIL
+// ============================================================================
 class EmailMonitor {
   constructor(config) {
     this.config = config;
     this.client = null;
-    this.isConnected = false;
     this.reconnectAttempts = 0;
-    this.maxReconnectAttempts = 10;
-    this.reconnectDelay = 5000;
-    this.processedMessages = new Set(); // Cache de mensagens já processadas
+    this.processedUIDs = new Map();
+    this.cleanupInterval = null;
+    this.startTime = Date.now();
+    this.initialCleanupDone = false;
+    this.status = 'inactive'; // inactive, connecting, active, error
   }
 
   async start() {
-    console.log(`[${this.config.employeeId}] Iniciando monitoramento para ${this.config.user}`);
+    console.log(`[${this.config.employeeId}] 🚀 INICIANDO MANUALMENTE`);
+    console.log(`[${this.config.employeeId}] 🔑 Senha: ${this.config.pass?.substring(0, 4)}...${this.config.pass?.slice(-4)}`);
+    
     try {
+      this.status = 'connecting';
       await this.connect();
-      await this.setupIdleListener();
+      await this.listen();
+      this.startCleanup();
+      this.status = 'active';
+      console.log(`[${this.config.employeeId}] ✅ ATIVO E PRONTO!\n`);
     } catch (error) {
-      console.error(`[${this.config.employeeId}] Erro ao iniciar:`, error.message);
-      await this.scheduleReconnect();
+      this.status = 'error';
+      console.error(`[${this.config.employeeId}] ❌ Erro:`, error.message);
+      this.reconnect();
     }
+  }
+
+  startCleanup() {
+    this.cleanupInterval = setInterval(() => {
+      const now = Date.now();
+      const fiveMinutesAgo = now - 5 * 60 * 1000;
+      
+      for (const [uid, timestamp] of this.processedUIDs.entries()) {
+        if (timestamp < fiveMinutesAgo) {
+          this.processedUIDs.delete(uid);
+        }
+      }
+      
+      console.log(`[${this.config.employeeId}] 🧹 Cache: ${this.processedUIDs.size} UIDs`);
+    }, 5 * 60 * 1000);
   }
 
   async connect() {
     try {
+      console.log(`[${this.config.employeeId}] 🔌 Conectando...`);
+      
       this.client = new ImapFlow({
         host: 'imap.gmail.com',
         port: 993,
         secure: true,
-        auth: {
-          user: this.config.user,
-          pass: this.config.pass
+        auth: { 
+          user: this.config.user, 
+          pass: this.config.pass 
         },
         logger: false,
-        socketTimeout: 60000,
-        greetingTimeout: 30000
+        // Configurações anti-timeout
+        socketTimeout: 120000,   // 2 minutos
+        greetingTimeout: 30000,  // 30 segundos
+        connectionTimeout: 30000 // 30 segundos
       });
 
       this.client.on('error', (err) => {
-        console.error(`[${this.config.employeeId}] Erro de conexão:`, err.message);
-        this.isConnected = false;
+        console.error(`[${this.config.employeeId}] ❌ Erro:`, err.message);
+        if (err.code === 'ECONNRESET' || err.code === 'ETIMEDOUT') {
+          console.log(`[${this.config.employeeId}] 🔄 Reconexão por timeout...`);
+        }
+        this.reconnect();
       });
 
       this.client.on('close', () => {
-        console.log(`[${this.config.employeeId}] Conexão fechada`);
-        this.isConnected = false;
-        this.scheduleReconnect();
+        console.log(`[${this.config.employeeId}] 🔌 Desconectado`);
+        this.reconnect();
       });
 
       await this.client.connect();
-      this.isConnected = true;
       this.reconnectAttempts = 0;
-      console.log(`[${this.config.employeeId}] ✅ Conectado com sucesso`);
+      console.log(`[${this.config.employeeId}] ✅ Conectado!`);
     } catch (error) {
-      throw new Error(`Falha na conexão: ${error.message}`);
-    }
-  }
-
-  async setupIdleListener() {
-    try {
-      await this.client.mailboxOpen('INBOX');
-      console.log(`[${this.config.employeeId}] 📬 INBOX aberta, aguardando novos e-mails...`);
-
-      this.client.on('exists', async (data) => {
-        console.log(`[${this.config.employeeId}] 🔔 Novo e-mail detectado! Count: ${data.count}`);
-        await this.processNewEmails();
-      });
-
-      let lock = await this.client.getMailboxLock('INBOX');
-      try {
-        await this.client.idle();
-      } finally {
-        lock.release();
-      }
-    } catch (error) {
-      console.error(`[${this.config.employeeId}] Erro no IDLE:`, error.message);
+      console.error(`[${this.config.employeeId}] ❌ FALHA:`, error.message);
       throw error;
     }
   }
 
-  async processNewEmails() {
+  async listen() {
+    await this.client.mailboxOpen('INBOX');
+    console.log(`[${this.config.employeeId}] 📬 Monitorando...`);
+
+    if (!this.initialCleanupDone) {
+      await this.markOldAsRead();
+      this.initialCleanupDone = true;
+    }
+
+    this.client.on('exists', () => this.processNew());
+
+    // IDLE em background (não bloqueia)
+    this.startIdle();
+  }
+
+  async startIdle() {
     try {
-      const messages = await this.client.search({ seen: false }, { uid: true });
-      if (messages.length === 0) return;
+      const lock = await this.client.getMailboxLock('INBOX');
+      try {
+        // IDLE com keep-alive (renova a cada 5 minutos)
+        while (this.client.usable) {
+          await this.client.idle();
+          
+          // Se chegou aqui, IDLE foi interrompido (novo e-mail ou timeout)
+          // Aguardar 100ms e entrar em IDLE novamente
+          await new Promise(r => setTimeout(r, 100));
+        }
+      } finally {
+        lock.release();
+      }
+    } catch (err) {
+      console.error(`[${this.config.employeeId}] ❌ IDLE erro:`, err.message);
+      
+      // Se erro de conexão, reconectar
+      if (err.code === 'ECONNRESET' || err.code === 'ETIMEDOUT' || !this.client.usable) {
+        console.log(`[${this.config.employeeId}] 🔄 Reconectando...`);
+        this.reconnect();
+      } else {
+        // Tentar IDLE novamente
+        setTimeout(() => this.startIdle(), 5000);
+      }
+    }
+  }
 
-      console.log(`[${this.config.employeeId}] Processando ${messages.length} e-mail(s) novo(s)`);
+  async markOldAsRead() {
+    try {
+      console.log(`[${this.config.employeeId}] 🔒 Limpando histórico...`);
+      
+      const oldMessages = await this.client.search({ seen: false }, { uid: true });
+      
+      if (oldMessages.length > 0) {
+        console.log(`[${this.config.employeeId}] 🧹 Marcando ${oldMessages.length} antigo(s)`);
+        
+        for (const uid of oldMessages) {
+          await this.client.messageFlagsAdd(uid, ['\\Seen']);
+          this.processedUIDs.set(uid, this.startTime);
+        }
+        
+        console.log(`[${this.config.employeeId}] ✅ Histórico limpo!\n`);
+      } else {
+        console.log(`[${this.config.employeeId}] ✅ Sem e-mails antigos\n`);
+      }
+    } catch (err) {
+      console.error(`[${this.config.employeeId}] ⚠️  Erro:`, err.message);
+    }
+  }
 
-      for (const uid of messages.slice(-5)) {
-        // Verificar se já processou esta mensagem (evita duplicatas na mesma sessão)
-        if (this.processedMessages.has(uid)) {
-          console.log(`[${this.config.employeeId}] ⏭️  UID ${uid} já processado nesta sessão`);
+  async processNew() {
+    try {
+      const uids = await this.client.search({ seen: false }, { uid: true });
+      if (!uids.length) return;
+
+      console.log(`[${this.config.employeeId}] 📨 ${uids.length} novo(s)`);
+
+      for (const uid of uids) {
+        const lastProcessed = this.processedUIDs.get(uid);
+        const now = Date.now();
+        
+        if (lastProcessed && (now - lastProcessed) < 30000) {
           continue;
         }
 
         await this.processMessage(uid);
-        this.processedMessages.add(uid);
+        this.processedUIDs.set(uid, now);
       }
-    } catch (error) {
-      console.error(`[${this.config.employeeId}] Erro ao processar e-mails:`, error.message);
+    } catch (err) {
+      console.error(`[${this.config.employeeId}] ❌:`, err.message);
     }
   }
 
   async processMessage(uid) {
     try {
-      console.log(`[${this.config.employeeId}] 📥 Buscando mensagem UID ${uid}...`);
-
-      let message = await this.client.fetchOne(uid, { 
+      const msg = await this.client.fetchOne(uid, { 
         source: true, 
-        envelope: true,
-        bodyStructure: true,
-        flags: true
+        envelope: true 
       });
 
-      let parsed = null;
+      let parsed;
+      
+      if (msg.source?.length > 0) {
+        parsed = await simpleParser(msg.source);
+      } else {
+        parsed = {
+          from: { value: [{ address: msg.envelope?.from?.[0]?.address }] },
+          subject: msg.envelope?.subject || '',
+          text: msg.envelope?.subject || ''
+        };
+      }
 
-      if (!message.source || message.source.length === 0) {
-        try {
-          const parts = [];
-          if (message.bodyStructure && message.bodyStructure.childNodes) {
-            for (let i = 0; i < message.bodyStructure.childNodes.length; i++) {
-              try {
-                const part = await this.client.download(uid, `${i + 1}`, { uid: true });
-                if (part && part.content) parts.push(part.content);
-              } catch (e) {}
-            }
+      let from = '';
+      
+      if (parsed.from?.value?.[0]?.address) {
+        from = parsed.from.value[0].address;
+      } else if (parsed.from?.text) {
+        const match = parsed.from.text.match(/<(.+?)>/);
+        from = match ? match[1] : parsed.from.text;
+      } else if (msg.envelope?.from?.[0]?.address) {
+        from = msg.envelope.from[0].address;
+      } else if (msg.envelope?.from?.[0]) {
+        const envFrom = msg.envelope.from[0];
+        from = envFrom.address || `${envFrom.mailbox}@${envFrom.host}`;
+      }
+
+      from = from.toLowerCase().trim();
+      
+      if (!from || from.length < 3 || !from.includes('@')) {
+        console.log(`[${this.config.employeeId}] ⚠️  Remetente inválido`);
+        await this.client.messageFlagsAdd(uid, ['\\Seen']);
+        return;
+      }
+
+      const domain = from.split('@')[1] || '';
+
+      console.log(`[${this.config.employeeId}] 📧 De: ${from}`);
+
+      let allowed = false;
+
+      for (const entry of ALLOWED_SENDERS) {
+        const e = entry.toLowerCase().trim();
+        
+        if (e.includes('@')) {
+          if (from === e) {
+            allowed = true;
+            break;
           }
-          if (parts.length > 0) {
-            parsed = await simpleParser(Buffer.concat(parts));
-          } else {
-            const download = await this.client.download(uid, '1', { uid: true });
-            parsed = await simpleParser(download.content);
-          }
-        } catch (altError) {
-          if (message.envelope) {
-            parsed = {
-              from: { value: [{ address: message.envelope.from?.[0]?.address }] },
-              subject: message.envelope.subject,
-              text: message.envelope.subject || ''
-            };
+        } else {
+          if (domain === e) {
+            allowed = true;
+            break;
           }
         }
-      } else {
-        parsed = await simpleParser(message.source);
       }
 
-      if (!parsed) {
+      if (!allowed) {
+        console.log(`[${this.config.employeeId}] ⏭️  Bloqueado`);
         await this.client.messageFlagsAdd(uid, ['\\Seen']);
         return;
       }
 
-      const fromAddress = parsed.from?.value?.[0]?.address || 
-                         message.envelope?.from?.[0]?.address || 
-                         'desconhecido';
-      const fromDomain = fromAddress.includes('@') 
-        ? fromAddress.split('@')[1]?.toLowerCase() || '' 
-        : '';
+      const subject = (parsed.subject || '').toLowerCase();
+      const body = (parsed.text || '').toLowerCase();
+      const fullText = `${subject} ${body}`;
 
-      // Verificar whitelist
-      const isAllowed = ALLOWED_SENDERS.some(domain => 
-        fromDomain.includes(domain.toLowerCase())
-      );
-
-      if (!isAllowed) {
-        console.log(`[${this.config.employeeId}] ⏭️  E-mail de ${fromAddress} ignorado`);
+      if (!fullText.includes(SECURITY_KEYWORD.toLowerCase())) {
+        console.log(`[${this.config.employeeId}] 🔒 Sem palavra-chave`);
         await this.client.messageFlagsAdd(uid, ['\\Seen']);
         return;
       }
 
-      console.log(`[${this.config.employeeId}] 🔍 Processando e-mail de ${fromAddress}`);
+      console.log(`[${this.config.employeeId}] ✅ Autorizado`);
 
-      const subject = parsed.subject || '';
-      const textBody = parsed.text || '';
-      const htmlBody = parsed.html ? parsed.html.replace(/<[^>]*>/g, ' ') : '';
-      const emailText = `${subject} ${textBody} ${htmlBody}`;
+      const codes = fullText.match(CODE_REGEX);
 
-      console.log(`[${this.config.employeeId}] 📝 Assunto: ${subject}`);
-
-      // Extrair códigos
-      const codes = this.extractCodes(emailText);
-
-      if (codes.length > 0) {
-        // PEGAR APENAS O PRIMEIRO CÓDIGO
-        const firstCode = codes[0]; 
-        console.log(`[${this.config.employeeId}] 🎯 Primeiro código: ${firstCode} (outros ignorados: ${codes.slice(1).join(', ') || 'nenhum'})`);
-        
-        await this.saveToDatabase(firstCode, fromAddress, subject);
-        await this.client.messageFlagsAdd(uid, ['\\Seen']);
-        console.log(`[${this.config.employeeId}] ✅ Processado com sucesso!`);
+      if (codes?.length > 0) {
+        const code = codes[0];
+        console.log(`[${this.config.employeeId}] 🎯 Código: ${code}`);
+        await this.save(code, from, parsed.subject || '');
       } else {
-        console.log(`[${this.config.employeeId}] ℹ️  Nenhum código encontrado`);
-        await this.client.messageFlagsAdd(uid, ['\\Seen']);
+        console.log(`[${this.config.employeeId}] ℹ️  Sem código`);
       }
 
-    } catch (error) {
-      console.error(`[${this.config.employeeId}] ❌ Erro:`, error.message);
+      await this.client.messageFlagsAdd(uid, ['\\Seen']);
+    } catch (err) {
+      console.error(`[${this.config.employeeId}] ❌ Erro:`, err.message);
       try {
         await this.client.messageFlagsAdd(uid, ['\\Seen']);
-      } catch (e) {}
+      } catch (e) {
+        // Ignora erro
+      }
     }
   }
 
-  extractCodes(text) {
-    if (!text) return [];
-    const matches = text.match(CODE_REGEX);
-    return matches ? [...new Set(matches)] : [];
-  }
-
-  async saveToDatabase(code, sender, subject) {
+  async save(code, sender, subject) {
     try {
-      // VERIFICAR SE JÁ EXISTE (últimos 5 minutos)
-      const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
-      
-      const { data: existing, error: checkError } = await supabase
+      const { data } = await supabase
         .from('verification_codes')
         .select('id')
         .eq('employee_email', this.config.user)
         .eq('code', code)
         .eq('sender', sender)
-        .gte('captured_at', fiveMinutesAgo)
+        .gte('captured_at', new Date(Date.now() - 300000).toISOString())
         .limit(1);
 
-      if (checkError) {
-        console.error(`[${this.config.employeeId}] Erro ao verificar duplicata:`, checkError.message);
+      if (data?.length > 0) {
+        console.log(`[${this.config.employeeId}] ⏭️  Duplicata`);
         return;
       }
 
-      if (existing && existing.length > 0) {
-        console.log(`[${this.config.employeeId}] ⏭️  Código ${code} já existe no banco (duplicata ignorada)`);
-        return;
-      }
+      await supabase.from('verification_codes').insert([{
+        employee_email: this.config.user,
+        employee_id: this.config.employeeId,
+        code,
+        sender,
+        subject,
+        captured_at: new Date().toISOString()
+      }]);
 
-      // Inserir no banco
-      const { error } = await supabase
-        .from('verification_codes')
-        .insert([{
-          employee_email: this.config.user,
-          employee_id: this.config.employeeId,
-          code: code,
-          sender: sender,
-          subject: subject,
-          captured_at: new Date().toISOString()
-        }]);
-
-      if (error) throw error;
-      console.log(`[${this.config.employeeId}] ✅ Código ${code} salvo no banco`);
-    } catch (error) {
-      console.error(`[${this.config.employeeId}] ❌ Erro ao salvar:`, error.message);
+      console.log(`[${this.config.employeeId}] ✅ Salvo!\n`);
+    } catch (err) {
+      console.error(`[${this.config.employeeId}] ❌ Erro:`, err.message);
     }
   }
 
-  async scheduleReconnect() {
-    if (this.reconnectAttempts >= this.maxReconnectAttempts) return;
+  reconnect() {
+    if (this.reconnectAttempts >= 10) {
+      console.error(`[${this.config.employeeId}] ❌ Máximo`);
+      return;
+    }
+
     this.reconnectAttempts++;
-    const delay = this.reconnectDelay * this.reconnectAttempts;
-    console.log(`[${this.config.employeeId}] 🔄 Reconectando em ${delay/1000}s...`);
-    setTimeout(async () => { await this.start(); }, delay);
+    const delay = 5000 * this.reconnectAttempts;
+    
+    console.log(`[${this.config.employeeId}] 🔄 Em ${delay/1000}s`);
+    setTimeout(() => this.start(), delay);
   }
 
-  async disconnect() {
-    if (this.client) { 
-      try { 
-        await this.client.logout(); 
-        console.log(`[${this.config.employeeId}] Desconectado`);
-      } catch (e) {} 
+  async stop() {
+    if (this.cleanupInterval) {
+      clearInterval(this.cleanupInterval);
+    }
+    try {
+      await this.client?.logout();
+    } catch (e) {
+      // Ignora
     }
   }
 }
 
-class EmailMonitorOrchestrator {
-  constructor() { this.monitors = []; }
-  
-  async startAll() {
-    console.log('🚀 Iniciando sistema de monitoramento...');
-    console.log(`📊 Total de contas: ${EMAIL_ACCOUNTS.length}`);
-    
-    for (const account of EMAIL_ACCOUNTS) {
-      const monitor = new EmailMonitor(account);
-      this.monitors.push(monitor);
-      await new Promise(r => setTimeout(r, 1000));
-      monitor.start().catch(err => console.error("Erro no monitor:", err));
-    }
-    
-    console.log('✅ Todos os monitores iniciados!');
+// ============================================================================
+// ORQUESTRADOR
+// ============================================================================
+class Orchestrator {
+  constructor() {
+    this.monitors = [];
   }
-  
-  async stopAll() {
-    console.log('🛑 Desligando sistema...');
-    for (const monitor of this.monitors) { 
-      await monitor.disconnect(); 
-    }
-    console.log('✅ Sistema desligado');
+
+  async start() {
+    console.log('🚀 Sistema iniciado\n');
+    console.log('💡 Use o dashboard para ATIVAR os monitores manualmente\n');
+    console.log(`🌐 Dashboard: http://localhost:${PORT}\n`);
+  }
+
+  async addMonitor(config) {
+    const monitor = new EmailMonitor(config);
+    this.monitors.push(monitor);
+    await monitor.start();
+  }
+
+  async stop() {
+    console.log('🛑 Encerrando...');
+    await Promise.all(this.monitors.map(m => m.stop()));
     process.exit(0);
   }
 }
 
-const orchestrator = new EmailMonitorOrchestrator();
-process.on('SIGINT', async () => { 
-  console.log('\n📛 SIGINT recebido');
-  await orchestrator.stopAll(); 
-});
-process.on('SIGTERM', async () => { 
-  console.log('\n📛 SIGTERM recebido');
-  await orchestrator.stopAll(); 
-});
+// ============================================================================
+// INICIALIZAÇÃO
+// ============================================================================
+const orchestrator = new Orchestrator();
 
-orchestrator.startAll().catch(err => {
-  console.error('❌ Erro fatal:', err);
-  process.exit(1);
-});
+process.on('SIGINT', () => orchestrator.stop());
+process.on('SIGTERM', () => orchestrator.stop());
 
-console.log('💡 Sistema rodando. Pressione Ctrl+C para encerrar.');
+orchestrator.start();

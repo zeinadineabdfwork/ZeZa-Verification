@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Painel de Monitoramento ZEZA</title>
+    <title>Sistema 2FA - Gerenciamento</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
@@ -12,108 +12,175 @@
         .card-animate:hover { transform: translateY(-3px); box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1); }
         @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
         .spinning { animation: spin 1s linear infinite; }
+        .tab-active { border-bottom: 3px solid #4f46e5; color: #4f46e5; }
     </style>
 </head>
-<body class="bg-slate-50 text-slate-900 font-sans">
+<body class="bg-slate-50 text-slate-900">
 
+    <!-- HEADER -->
     <div class="bg-indigo-900 text-white shadow-lg">
-        <div class="max-w-6xl mx-auto px-6 py-8 flex flex-col md:flex-row justify-between items-center gap-4">
-            <div>
-                <h1 class="text-3xl font-black tracking-tight">ZEZA LIVE MONITOR</h1>
-                <p class="text-indigo-300 text-sm">Dados obtidos diretamente do Database</p>
-            </div>
-            
-            <div class="flex items-center gap-3">
-                <button onclick="fetchLatestData()" id="refreshBtn" class="bg-indigo-700 hover:bg-indigo-600 px-6 py-3 rounded-xl font-bold transition flex items-center gap-2 shadow-md">
-                    <i id="refreshIcon" class="fa-solid fa-sync"></i> Atualizar Agora
+        <div class="max-w-7xl mx-auto px-6 py-6">
+            <div class="flex justify-between items-center">
+                <div>
+                    <h1 class="text-3xl font-black">2FA MONITOR</h1>
+                    <p class="text-indigo-300 text-sm">Sistema de Gerenciamento</p>
+                </div>
+                <button onclick="refresh()" class="bg-indigo-700 hover:bg-indigo-600 px-6 py-3 rounded-xl font-bold transition flex items-center gap-2">
+                    <i id="refreshIcon" class="fa-solid fa-sync"></i> Atualizar
                 </button>
-            </div>1
+            </div>
         </div>
     </div>
 
-    <main class="max-w-6xl mx-auto py-10 px-6">
-        <div id="statusIndicator" class="mb-6 flex items-center gap-2 text-sm font-medium text-slate-500">
-            <span class="w-2 h-2 bg-yellow-500 rounded-full animate-pulse"></span>
-            Conectando ao Banco de Dados...
+    <!-- TABS -->
+    <div class="max-w-7xl mx-auto px-6 mt-6">
+        <div class="flex gap-6 border-b border-slate-200">
+            <button onclick="switchTab('codes')" id="tabCodes" class="tab-active px-4 py-3 font-bold">
+                <i class="fa-solid fa-key mr-2"></i> Códigos
+            </button>
+            <button onclick="switchTab('accounts')" id="tabAccounts" class="px-4 py-3 font-bold text-slate-500 hover:text-indigo-600">
+                <i class="fa-solid fa-users mr-2"></i> Funcionários
+            </button>
         </div>
+    </div>
 
-        <div id="grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+    <!-- CONTEÚDO -->
+    <main class="max-w-7xl mx-auto px-6 py-8">
+        
+        <!-- ABA: CÓDIGOS -->
+        <div id="contentCodes">
+            <div id="statusIndicator" class="mb-6 flex items-center gap-2 text-sm font-medium text-slate-500">
+                <span class="w-2 h-2 bg-green-500 rounded-full"></span> Conectado ao Database
             </div>
 
-        <div id="emptyState" class="hidden py-20 text-center">
-            <i class="fa-solid fa-inbox text-5xl text-slate-200 mb-4"></i>
-            <p class="text-slate-400">Nenhum código encontrado no banco de dados.</p>
+            <div id="codesGrid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"></div>
+
+            <div id="emptyStateCodes" class="hidden py-20 text-center">
+                <i class="fa-solid fa-inbox text-5xl text-slate-200 mb-4"></i>
+                <p class="text-slate-400">Nenhum código capturado ainda.</p>
+            </div>
         </div>
+
+        <!-- ABA: FUNCIONÁRIOS -->
+        <div id="contentAccounts" class="hidden">
+            
+            <!-- BOTÃO CADASTRAR -->
+            <div class="mb-6">
+                <button onclick="toggleRegisterForm()" class="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-3 rounded-xl font-bold transition flex items-center gap-2">
+                    <i class="fa-solid fa-user-plus"></i> Cadastrar Novo Funcionário
+                </button>
+            </div>
+
+            <!-- FORMULÁRIO DE CADASTRO -->
+            <div id="registerForm" class="hidden mb-8 bg-white rounded-2xl p-8 shadow-lg border border-slate-200">
+                <h2 class="text-2xl font-black mb-6 text-indigo-900">
+                    <i class="fa-solid fa-user-plus mr-2"></i> Novo Funcionário
+                </h2>
+
+                <form onsubmit="registerAccount(event)" class="space-y-4">
+                    <div>
+                        <label class="block text-sm font-bold text-slate-700 mb-2">Nome Completo</label>
+                        <input type="text" id="inputName" required 
+                               class="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                               placeholder="Ex: João Silva">
+                    </div>
+
+                    <div>
+                        <label class="block text-sm font-bold text-slate-700 mb-2">E-mail Gmail</label>
+                        <input type="email" id="inputEmail" required 
+                               class="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                               placeholder="funcionario@gmail.com">
+                    </div>
+
+                    <div>
+                        <label class="block text-sm font-bold text-slate-700 mb-2">Senha de App do Google</label>
+                        <input type="text" id="inputPassword" required 
+                               class="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 font-mono"
+                               placeholder="xxxx xxxx xxxx xxxx">
+                        <p class="text-xs text-slate-500 mt-1">
+                            <i class="fa-solid fa-info-circle"></i> 
+                            Gere em: <a href="https://myaccount.google.com/apppasswords" target="_blank" class="text-indigo-600 underline">myaccount.google.com/apppasswords</a>
+                        </p>
+                    </div>
+
+                    <div class="flex gap-3 pt-4">
+                        <button type="submit" class="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-3 rounded-xl font-bold transition">
+                            <i class="fa-solid fa-check mr-2"></i> Cadastrar
+                        </button>
+                        <button type="button" onclick="toggleRegisterForm()" class="px-6 py-3 border border-slate-300 rounded-xl font-bold hover:bg-slate-50 transition">
+                            Cancelar
+                        </button>
+                    </div>
+                </form>
+            </div>
+
+            <!-- LISTA DE FUNCIONÁRIOS -->
+            <div id="accountsList" class="space-y-4"></div>
+
+            <div id="emptyStateAccounts" class="hidden py-20 text-center">
+                <i class="fa-solid fa-users text-5xl text-slate-200 mb-4"></i>
+                <p class="text-slate-400">Nenhum funcionário cadastrado.</p>
+            </div>
+        </div>
+
     </main>
 
     <script>
         let supabaseClient;
-        let isFetching = false;
+        let currentTab = 'codes';
 
+        // ====================================================================
+        // INICIALIZAÇÃO
+        // ====================================================================
         async function init() {
-            try {
-                const response = await fetch('/config');
-                const config = await response.json();
+            const response = await fetch('/config');
+            const config = await response.json();
+            supabaseClient = window.supabase.createClient(config.supabaseUrl, config.supabaseKey);
 
-                // Inicializa o cliente Supabase no Frontend
-                supabaseClient = window.supabase.createClient(config.supabaseUrl, config.supabaseKey);
-                
-                document.getElementById('statusIndicator').innerHTML = `
-                    <span class="w-2 h-2 bg-green-500 rounded-full"></span> 
-                    Conectado ao Database: Realtime Ativo
-                `;
+            // Realtime para códigos
+            supabaseClient
+                .channel('realtime_codes')
+                .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'verification_codes' }, () => {
+                    loadCodes();
+                })
+                .subscribe();
 
-                // Busca inicial
-                fetchLatestData();
-
-                // Escuta Realtime (Se configurado no Supabase, funciona instantâneo)
-                supabaseClient
-                    .channel('realtime_codes')
-                    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'verification_codes' }, payload => {
-                        console.log('Novo código detectado via Realtime!', payload.new);
-                        fetchLatestData(); // Re-busca para garantir ordem e dados completos
-                        new Audio('https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3').play().catch(()=>{});
-                    })
-                    .subscribe();
-
-            } catch (err) {
-                console.error("Erro na inicialização:", err);
-                document.getElementById('statusIndicator').innerHTML = '<span class="text-red-500">Erro ao conectar com o servidor</span>';
-            }
+            loadCodes();
+            loadAccounts();
         }
 
-        async function fetchLatestData() {
-            if (!supabaseClient || isFetching) return;
-            
-            isFetching = true;
-            const btn = document.getElementById('refreshBtn');
-            const icon = document.getElementById('refreshIcon');
-            icon.classList.add('spinning');
-            btn.disabled = true;
+        // ====================================================================
+        // TABS
+        // ====================================================================
+        function switchTab(tab) {
+            currentTab = tab;
 
-            const { data, error } = await supabaseClient
+            document.getElementById('contentCodes').classList.toggle('hidden', tab !== 'codes');
+            document.getElementById('contentAccounts').classList.toggle('hidden', tab !== 'accounts');
+
+            document.getElementById('tabCodes').classList.toggle('tab-active', tab === 'codes');
+            document.getElementById('tabAccounts').classList.toggle('tab-active', tab === 'accounts');
+
+            if (tab === 'codes') loadCodes();
+            if (tab === 'accounts') loadAccounts();
+        }
+
+        // ====================================================================
+        // CÓDIGOS
+        // ====================================================================
+        async function loadCodes() {
+            const { data } = await supabaseClient
                 .from('verification_codes')
                 .select('*')
                 .order('captured_at', { ascending: false })
-                .limit(20); // Pega os últimos 20 para performance
+                .limit(20);
 
-            if (error) {
-                console.error("Erro ao buscar dados:", error);
-            } else {
-                render(data);
-            }
-
-            // Simula um delay visual pequeno para o usuário sentir o refresh
-            setTimeout(() => {
-                icon.classList.remove('spinning');
-                btn.disabled = false;
-                isFetching = false;
-            }, 600);
+            renderCodes(data);
         }
 
-        function render(codes) {
-            const grid = document.getElementById('grid');
-            const empty = document.getElementById('emptyState');
+        function renderCodes(codes) {
+            const grid = document.getElementById('codesGrid');
+            const empty = document.getElementById('emptyStateCodes');
 
             if (!codes || codes.length === 0) {
                 grid.innerHTML = '';
@@ -123,31 +190,28 @@
 
             empty.classList.add('hidden');
             grid.innerHTML = codes.map(item => {
-
-                const firstCode = item.code.split(',')[0].trim();
                 const date = new Date(item.captured_at);
-
                 return `
                 <div class="bg-white rounded-2xl p-6 shadow-sm border border-slate-200 card-animate">
-                    <div class="flex justify-between items-start mb-4">
-                        <span class="bg-indigo-50 text-indigo-700 text-[10px] font-bold px-2 py-1 rounded-lg uppercase tracking-wider">
+                    <div class="flex justify-between mb-4">
+                        <span class="bg-indigo-50 text-indigo-700 text-[10px] font-bold px-2 py-1 rounded-lg uppercase">
                             ${item.sender.split('.')[0]}
                         </span>
-                        <div class="text-right text-[10px] font-bold text-slate-400">
+                        <div class="text-[10px] font-bold text-slate-400 text-right">
                             ${date.toLocaleTimeString()} <br> ${date.toLocaleDateString()}
                         </div>
                     </div>
                     
-                    <div class="mb-5">
-                        <p class="text-[11px] text-slate-400 uppercase font-black tracking-tighter mb-1">Responsável / ID</p>
-                        <p class="text-sm font-bold text-slate-700 truncate">${item.employee_id} <span class="font-normal text-slate-400">(${item.employee_email})</span></p>
+                    <div class="mb-4">
+                        <p class="text-[11px] text-slate-400 uppercase font-bold">Funcionário</p>
+                        <p class="text-sm font-bold text-slate-700">${item.employee_id}</p>
                     </div>
 
-                    <div class="relative group bg-slate-50 rounded-xl p-5 border border-slate-100 hover:border-indigo-200 transition-colors">
+                    <div class="relative bg-slate-50 rounded-xl p-5 border border-slate-100 hover:border-indigo-200 transition group">
                         <div class="text-center">
-                            <span class="text-4xl font-mono font-black text-slate-800 tracking-tighter">${firstCode}</span>
+                            <span class="text-4xl font-mono font-black text-slate-800">${item.code}</span>
                         </div>
-                        <button onclick="copyCode('${firstCode}', this)" class="absolute top-2 right-2 text-slate-300 hover:text-indigo-600 transition">
+                        <button onclick="copyCode('${item.code}', this)" class="absolute top-2 right-2 text-slate-300 hover:text-indigo-600">
                             <i class="fa-regular fa-copy text-lg"></i>
                         </button>
                     </div>
@@ -160,10 +224,216 @@
             navigator.clipboard.writeText(text);
             const icon = btn.querySelector('i');
             icon.className = 'fa-solid fa-check text-green-500';
-            setTimeout(() => icon.className = 'fa-regular fa-copy text-lg text-slate-300', 2000);
+            setTimeout(() => icon.className = 'fa-regular fa-copy text-lg', 2000);
         }
 
-        // Inicia o app
+        // ====================================================================
+        // FUNCIONÁRIOS
+        // ====================================================================
+        async function loadAccounts() {
+            const response = await fetch('/api/accounts');
+            const result = await response.json();
+            renderAccounts(result.data);
+        }
+
+        function renderAccounts(accounts) {
+            const list = document.getElementById('accountsList');
+            const empty = document.getElementById('emptyStateAccounts');
+
+            if (!accounts || accounts.length === 0) {
+                list.innerHTML = '';
+                empty.classList.remove('hidden');
+                return;
+            }
+
+            empty.classList.add('hidden');
+            
+            // Buscar status dos monitores
+            fetch('/api/monitors/status')
+                .then(r => r.json())
+                .then(statusData => {
+                    const monitorStatus = {};
+                    statusData.monitors?.forEach(m => {
+                        monitorStatus[m.employeeId] = m;
+                    });
+
+                    list.innerHTML = accounts.map(acc => {
+                        const monitor = monitorStatus[acc.employee_id];
+                        const isActive = monitor?.status === 'active';
+                        const isConnecting = monitor?.status === 'connecting';
+                        const cleanupDone = monitor?.cleanupDone || false;
+                        
+                        let statusBadge, statusText, buttonText, buttonClass, buttonIcon;
+                        
+                        if (isActive && cleanupDone) {
+                            statusBadge = 'bg-green-50 text-green-700';
+                            statusText = '🟢 Ativo';
+                            buttonText = 'Desativar';
+                            buttonClass = 'bg-red-600 hover:bg-red-700';
+                            buttonIcon = 'fa-stop';
+                        } else if (isConnecting || (isActive && !cleanupDone)) {
+                            statusBadge = 'bg-yellow-50 text-yellow-700';
+                            statusText = '🟡 Ativando...';
+                            buttonText = 'Ativando...';
+                            buttonClass = 'bg-gray-400 cursor-not-allowed';
+                            buttonIcon = 'fa-spinner fa-spin';
+                        } else {
+                            statusBadge = 'bg-red-50 text-red-700';
+                            statusText = '🔴 Inativo';
+                            buttonText = 'Ativar';
+                            buttonClass = 'bg-green-600 hover:bg-green-700';
+                            buttonIcon = 'fa-play';
+                        }
+
+                        return `
+                        <div class="bg-white rounded-2xl p-6 shadow-sm border border-slate-200 card-animate">
+                            <div class="flex justify-between items-center">
+                                <div class="flex items-center gap-4 flex-1">
+                                    <div class="w-12 h-12 bg-indigo-100 rounded-full flex items-center justify-center">
+                                        <i class="fa-solid fa-user text-indigo-600 text-xl"></i>
+                                    </div>
+                                    <div class="flex-1">
+                                        <h3 class="font-bold text-lg text-slate-900">${acc.employee_name}</h3>
+                                        <p class="text-sm text-slate-500">${acc.email}</p>
+                                        <div class="flex items-center gap-3 mt-2">
+                                            <span class="text-xs font-mono font-bold text-indigo-600">${acc.employee_id}</span>
+                                            <span class="text-xs font-bold px-2 py-1 rounded-lg ${statusBadge}">
+                                                ${statusText}
+                                            </span>
+                                            ${monitor ? `<span class="text-xs text-slate-400">${monitor.processedCount} processados</span>` : ''}
+                                        </div>
+                                    </div>
+                                </div>
+                                <button 
+                                    onclick="toggleMonitor('${acc.employee_id}', ${isActive})" 
+                                    class="${buttonClass} text-white px-6 py-3 rounded-xl font-bold transition flex items-center gap-2"
+                                    ${isConnecting ? 'disabled' : ''}>
+                                    <i class="fa-solid ${buttonIcon}"></i> ${buttonText}
+                                </button>
+                            </div>
+                        </div>
+                        `;
+                    }).join('');
+                });
+        }
+
+        // ====================================================================
+        // CADASTRO
+        // ====================================================================
+        function toggleRegisterForm() {
+            const form = document.getElementById('registerForm');
+            form.classList.toggle('hidden');
+            
+            if (!form.classList.contains('hidden')) {
+                document.getElementById('inputName').focus();
+            }
+        }
+
+        async function registerAccount(e) {
+            e.preventDefault();
+
+            const name = document.getElementById('inputName').value.trim();
+            const email = document.getElementById('inputEmail').value.trim();
+            const password = document.getElementById('inputPassword').value.trim();
+
+            if (!name || !email || !password) {
+                alert('Preencha todos os campos!');
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/accounts', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        employee_name: name,
+                        email: email,
+                        password_app: password
+                    })
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    alert(`✅ Funcionário cadastrado!\nID: ${result.data.employee_id}\nMonitoramento iniciado automaticamente.`);
+                    
+                    // Limpar form
+                    document.getElementById('inputName').value = '';
+                    document.getElementById('inputEmail').value = '';
+                    document.getElementById('inputPassword').value = '';
+                    
+                    toggleRegisterForm();
+                    loadAccounts();
+                } else {
+                    alert('❌ Erro: ' + result.error);
+                }
+            } catch (err) {
+                alert('❌ Erro ao cadastrar: ' + err.message);
+            }
+        }
+
+        // ====================================================================
+        // CONTROLE DE MONITORES
+        // ====================================================================
+        async function toggleMonitor(employeeId, isActive) {
+            const action = isActive ? 'stop' : 'start';
+            const actionText = isActive ? 'desativando' : 'ativando';
+            
+            console.log(`${actionText} monitor ${employeeId}...`);
+            
+            try {
+                const response = await fetch(`/api/monitors/${employeeId}/toggle`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action })
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    console.log(`✅ Monitor ${employeeId} ${actionText}`);
+                    
+                    // Atualizar lista após 2 segundos (dar tempo para limpeza de histórico)
+                    setTimeout(() => loadAccounts(), 2000);
+                    
+                    // Atualizar a cada segundo enquanto está ativando
+                    if (action === 'start') {
+                        const interval = setInterval(() => {
+                            loadAccounts();
+                        }, 1000);
+                        
+                        // Parar após 10 segundos
+                        setTimeout(() => clearInterval(interval), 10000);
+                    }
+                } else {
+                    alert('❌ Erro: ' + result.error);
+                }
+            } catch (err) {
+                alert('❌ Erro ao controlar monitor: ' + err.message);
+            }
+        }
+
+        // Atualizar status automaticamente a cada 5 segundos
+        setInterval(() => {
+            if (currentTab === 'accounts') {
+                loadAccounts();
+            }
+        }, 5000);
+
+        // ====================================================================
+        // UTILS
+        // ====================================================================
+        function refresh() {
+            const icon = document.getElementById('refreshIcon');
+            icon.classList.add('spinning');
+            
+            if (currentTab === 'codes') loadCodes();
+            if (currentTab === 'accounts') loadAccounts();
+            
+            setTimeout(() => icon.classList.remove('spinning'), 600);
+        }
+
+        // Iniciar
         init();
     </script>
 </body>
